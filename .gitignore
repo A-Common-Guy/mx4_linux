@@ -1,2 +1,8 @@
 __pycache__/
 dist/
+debian/.debhelper/
+debian/debhelper-build-stamp
+debian/files
+debian/mx4ctl/
+debian/*.debhelper
+debian/*.substvars

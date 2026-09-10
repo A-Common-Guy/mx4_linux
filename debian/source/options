@@ -1,0 +1,5 @@
+# build products and caches are not source
+tar-ignore = "dist"
+tar-ignore = "__pycache__"
+tar-ignore = ".git"
+tar-ignore = ".git/*"

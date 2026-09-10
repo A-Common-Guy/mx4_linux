@@ -1,0 +1,10 @@
+[Unit]
+Description=Restore MX Master 4 settings
+After=graphical-session.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/mx4-wizard --restore
+
+[Install]
+WantedBy=graphical-session.target

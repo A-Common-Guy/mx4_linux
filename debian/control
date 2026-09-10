@@ -1,0 +1,43 @@
+Source: mx4ctl
+Section: utils
+Priority: optional
+Maintainer: Tzahi Serruya <stzahi@gmail.com>
+Build-Depends: debhelper-compat (= 13)
+Standards-Version: 4.7.0
+Homepage: https://github.com/stzahi/mx4_linux
+Vcs-Git: https://github.com/stzahi/mx4_linux.git
+Vcs-Browser: https://github.com/stzahi/mx4_linux
+Rules-Requires-Root: no
+
+Package: mx4ctl
+Architecture: all
+Depends: ${misc:Depends},
+         python3 (>= 3.8),
+         python3-gi,
+         gir1.2-gtk-3.0,
+         python3-dbus
+Recommends: xdotool, x11-utils, libnotify-bin
+Description: Logitech MX Master 4 haptics and actions ring for Linux
+ The MX Master 4's headline features - haptic feedback and the thumb-panel
+ "Actions Ring" button - only work with Logi Options+, which has no Linux
+ build. mx4ctl talks HID++ 2.0 straight to the mouse over /dev/hidraw and
+ brings them back, with no vendor software and no kernel module.
+ .
+ The thumb button opens an actions ring at the cursor: round buttons on a
+ circle, chosen by flicking towards one and clicking. Entries run commands
+ or built-in desktop actions, and three of them are dials and toggles -
+ scroll over the brightness or volume button to change it (the arc around
+ the button shows the level) and click the microphone button to mute it.
+ .
+ Also included:
+ .
+  * all 16 hardware haptic waveforms, from the command line or a script
+  * haptic intensity and thumb-button force threshold
+  * DPI, ratchet/freespin, wheel torque and auto-disengage
+  * mouse gestures: hold the gesture button and flick
+  * desktop notifications buzz the mouse, with per-application waveforms
+  * a haptic tick on workspace changes, and a low-battery buzz
+  * mx4ctl timer 25m, which buzzes the mouse when the time is up
+  * mx4-wizard, an interactive tuner for the mouse-side settings
+ .
+ A per-user systemd service runs the daemon in graphical sessions.
