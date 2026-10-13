@@ -36,6 +36,94 @@ No dependencies beyond the Python standard library for the CLI; the daemon
 uses PyGObject and dbus-python (preinstalled on Ubuntu GNOME). Coexists
 fine with Solaar.
 
+## Install
+
+**Requirements:** Ubuntu 20.04+ (or any distro with Python 3, PyGObject,
+GTK 3 and dbus-python — all preinstalled on Ubuntu GNOME) and an MX Master 4
+connected through the Logi Bolt receiver or Bluetooth. Coexists fine with Solaar.
+
+### 1. Install
+
+**Option A — the .deb package (recommended)**
+
+Grab the latest `.deb` from the
+[releases page](https://github.com/A-Common-Guy/mx4_linux/releases) (every
+push to `main` builds, tests and publishes one) and install it:
+
+```
+sudo apt install ./mx4ctl_*_all.deb
+```
+
+or build it yourself from a checkout: `./packaging/build-deb.sh` → `dist/`.
+
+The package installs the `mx4ctl` and `mx4-wizard` commands, a udev rule
+that gives logged-in users access to the mouse (and `/dev/uinput`), the
+GNOME cursor extension, and a per-user daemon enabled for every graphical
+session. Saved wizard settings are replayed whenever the mouse reconnects —
+no extra setup step.
+
+**Option B — from the repo (development)**
+
+```
+git clone git@github.com:A-Common-Guy/mx4_linux.git
+cd mx4_linux
+./install.sh
+mx4-wizard --setup        # one sudo: udev rule so the mouse is readable
+```
+
+`install.sh` symlinks `mx4ctl` and `mx4-wizard` into `~/.local/bin`, copies
+`config.example.ini` to `~/.config/mx4ctl/config.ini`, installs the GNOME
+extension for your user, and enables a systemd user service pointing at the
+checkout.
+
+### 2. Log out and back in
+
+Needed once, for three things to take effect: the udev / uinput permissions,
+the daemon starting with your session, and — on GNOME — the shell noticing
+the new extension.
+
+### 3. GNOME on Wayland: one extra step
+
+Without the extension the actions ring opens in the centre of the screen
+instead of at the cursor. After logging back in the daemon enables it by
+itself; if the ring is still centred, run:
+
+```
+gnome-extensions enable mx4ctl-cursor@mx4ctl
+```
+
+(Plasma needs nothing — the daemon uses KWin. X11 needs nothing either.)
+
+### 4. Check that it works
+
+```
+mx4ctl status                      # device, battery, haptic level
+mx4ctl play happy_alert            # the mouse should buzz
+systemctl --user status mx4ctl     # daemon running?
+```
+
+Daemon not started yet: `systemctl --user start mx4ctl`. Mouse not found
+(`no Logitech device with HID++ feature 0x19b0`): the hidraw permission is
+missing — run `mx4-wizard --setup` (or, by hand, add a udev rule such as
+`KERNEL=="hidraw*", ATTRS{idVendor}=="046d", TAG+="uaccess"`), then replug
+the receiver. Then press the thumb button: the actions ring should open
+under the cursor.
+
+### 5. Tune it
+
+Run `mx4-wizard` ([below](#interactive-tuning--mx4-wizard)) for DPI, wheel
+and force threshold, and edit `~/.config/mx4ctl/config.ini` for the ring
+entries and gestures (`systemctl --user restart mx4ctl` after changes).
+
+### Uninstall
+
+- .deb: `sudo apt remove mx4ctl`
+- repo install: `systemctl --user disable --now mx4ctl`, then delete the
+  symlinks in `~/.local/bin` and
+  `~/.local/share/gnome-shell/extensions/mx4ctl-cursor@mx4ctl`.
+
+Per-user settings in `~/.config/mx4ctl` stay; delete them by hand if wanted.
+
 ## Usage
 
 ```
@@ -121,48 +209,7 @@ settings, which persist on their own.
 
 The wizard is standalone — it needs no daemon, and works fine alongside one.
 
-## Install
-
-### As a package (recommended — Ubuntu 20.04+)
-
-Grab the latest `.deb` from the
-[releases page](https://github.com/stzahi/mx4_linux/releases) —
-every push to `main` builds, tests and publishes one, with a changelog —
-or build it yourself:
-
-```
-./packaging/build-deb.sh              # → dist/mx4ctl_<version>_all.deb
-sudo apt install ./dist/mx4ctl_*.deb  # on any machine
-```
-
-The package installs the CLI to `/usr/bin/mx4ctl` and the wizard to
-`/usr/bin/mx4-wizard`, a udev rule granting logged-in users access to
-Logitech hidraw devices (receiver and Bluetooth), and enables the daemon
-for all graphical sessions — it starts at next login, or immediately with
-`systemctl --user start mx4ctl`. On first run the daemon creates
-`~/.config/mx4ctl/config.ini` from the packaged example; edit it and
-`systemctl --user restart mx4ctl`.
-
-The wizard's setup comes with the package too: the udev rule replays saved
-settings whenever the mouse (re)appears, and `mx4ctl-restore.service` is
-enabled for all users — so `mx4-wizard` needs no sudo step, just run it
-and tune.
-
-**Uninstall:** `sudo apt remove mx4ctl` (per-user configs in
-`~/.config/mx4ctl` stay; delete them by hand if wanted).
-
-### From the repo (development)
-
-```
-./install.sh
-```
-
-Symlinks `mx4ctl` and `mx4-wizard` into `~/.local/bin`, copies
-`config.example.ini` to `~/.config/mx4ctl/config.ini`, and enables a
-systemd user service pointing at the repo. Remove with
-`systemctl --user disable --now mx4ctl`.
-
-### X11 and Wayland
+## X11 and Wayland
 
 Everything over HID++ (haptics, notifications, timers, DPI/ratchet) is
 session-independent. Desktop actions use `@built-in` names
@@ -180,13 +227,20 @@ there anyway: the daemon runs its GTK side on the X11/XWayland backend when
 one is available (so it *can* place the window — `GDK_BACKEND=wayland` in
 the unit opts out, and the ring then opens centered), and it asks the
 compositor for the pointer, because XWayland's own answer is stale — X only
-learns the position while the pointer is over an X window. On Plasma that
-question goes to KWin: `mx4/cursor.py` loads a three-line KWin script that
-registers a shortcut ("mx4ctl: locate the pointer", listed under KWin in
-System Settings → Shortcuts, with no key bound) and reports
-`workspace.cursorPos` back over D-Bus — about 10 ms per press. Elsewhere on
-Wayland there is no such hook, so after a few silent tries the ring settles
-for opening centered. The workspace haptic tick uses
+learns the position while the pointer is over an X window:
+
+- **GNOME** — the small shell extension in `gnome-extension/`
+  (`mx4ctl-cursor@mx4ctl`) answers `org.mx4ctl.Cursor.GetPosition` over
+  D-Bus with `global.get_pointer()`. The .deb and `install.sh` both install
+  it; see [GNOME on Wayland](#3-gnome-on-wayland-one-extra-step) above.
+- **Plasma** — `mx4/cursor.py` loads a three-line KWin script that
+  registers a shortcut ("mx4ctl: locate the pointer", listed under KWin in
+  System Settings → Shortcuts, with no key bound) and reports
+  `workspace.cursorPos` back over D-Bus — about 10 ms per press.
+- **Elsewhere** there is no such hook, so after a few silent tries the ring
+  settles for opening centered.
+
+The workspace haptic tick uses
 X11/XWayland properties and may stay silent on some Wayland setups.
 After installing the .deb on Wayland, reboot (or reload udev rules and
 re-login) so the uinput permission takes effect.
@@ -267,12 +321,3 @@ Waveform IDs: `0x00 sharp_state_change, 0x01 damp_state_change,
 0x05 happy_alert, 0x06 angry_alert, 0x07 completed, 0x08 square, 0x09 wave,
 0x0A firework, 0x0B mad, 0x0C knock, 0x0D jingle, 0x0E ringing,
 0x1B whisper_collision`.
-
-## Permissions
-
-On Ubuntu with Solaar installed, its udev rules already grant the seated
-user access to the hidraw node. Otherwise add a udev rule such as:
-
-```
-KERNEL=="hidraw*", ATTRS{idVendor}=="046d", TAG+="uaccess"
-```

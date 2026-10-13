@@ -14,6 +14,7 @@ opening the actions ring.
 from __future__ import annotations
 
 import os
+import subprocess
 from pathlib import Path
 
 from gi.repository import Gdk, GLib
@@ -249,6 +250,7 @@ class GnomeCursor:
         self.log = log
         self.ready = False
         self.warned = False
+        self.enabled_once = False
 
     def start(self) -> bool:
         return True
@@ -263,6 +265,15 @@ class GnomeCursor:
             self.ready = True
             return KWinCursor._to_x_pixels(reply.unpack()[0])
         except GLib.Error as e:
+            if not self.enabled_once:
+                # installed since this login? the shell only lists it after a
+                # re-login, but from then on the daemon can switch it on itself
+                self.enabled_once = True
+                try:
+                    subprocess.run(["gnome-extensions", "enable", self.UUID],
+                                   capture_output=True, timeout=5)
+                except (OSError, subprocess.SubprocessError):
+                    pass
             if not self.warned:
                 self.warned = True
                 self.log(f"gnome cursor extension not answering ({e.message}) — the ring "

@@ -13,7 +13,10 @@ override_dh_auto_install:
 	           debian/mx4ctl/usr/bin \
 	           debian/mx4ctl/usr/lib/systemd/user \
 	           debian/mx4ctl/usr/lib/udev/rules.d \
-	           debian/mx4ctl/usr/share/mx4ctl
+	           debian/mx4ctl/usr/share/mx4ctl \
+	           debian/mx4ctl/usr/share/gnome-shell/extensions/mx4ctl-cursor@mx4ctl
+	install -m 644 gnome-extension/mx4ctl-cursor@mx4ctl/* \
+	               debian/mx4ctl/usr/share/gnome-shell/extensions/mx4ctl-cursor@mx4ctl/
 	install -m 644 mx4/*.py debian/mx4ctl/usr/lib/mx4ctl/mx4/
 	install -m 755 mx4ctl debian/mx4ctl/usr/bin/mx4ctl
 	install -m 755 mx4-wizard debian/mx4ctl/usr/bin/mx4-wizard

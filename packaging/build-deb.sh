@@ -11,13 +11,18 @@ trap 'rm -rf "$STAGE"' EXIT
 # -- payload -------------------------------------------------------------
 install -d "$STAGE/usr/lib/mx4ctl/mx4" "$STAGE/usr/bin" \
            "$STAGE/usr/lib/systemd/user" "$STAGE/usr/lib/udev/rules.d" \
-           "$STAGE/usr/share/mx4ctl" "$STAGE/usr/share/doc/mx4ctl"
+           "$STAGE/usr/share/mx4ctl" "$STAGE/usr/share/doc/mx4ctl" \
+           "$STAGE/usr/share/gnome-shell/extensions/mx4ctl-cursor@mx4ctl"
 
 install -m 644 mx4/*.py "$STAGE/usr/lib/mx4ctl/mx4/"
 install -m 755 mx4ctl "$STAGE/usr/bin/mx4ctl"
 install -m 755 mx4-wizard "$STAGE/usr/bin/mx4-wizard"
 install -m 644 config.example.ini "$STAGE/usr/share/mx4ctl/"
 install -m 644 README.md "$STAGE/usr/share/doc/mx4ctl/"
+
+# GNOME Shell extension that tells the daemon where the pointer is (Wayland)
+install -m 644 gnome-extension/mx4ctl-cursor@mx4ctl/* \
+        "$STAGE/usr/share/gnome-shell/extensions/mx4ctl-cursor@mx4ctl/"
 
 # the units and the udev rule live in packaging/files, so this script and the
 # debian/ source package (for the PPA) install the very same ones
