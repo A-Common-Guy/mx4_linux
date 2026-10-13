@@ -1,0 +1,10 @@
+mx4ctl (0.6.0~resolute1) resolute; urgency=medium
+
+  * First upload to ppa:stzahi/logi-mx4-ring.
+  * Actions ring on the thumb button, in place of the old popup menu:
+    buttons spiral out around the cursor, dials for brightness and volume,
+    a microphone toggle, and a drawn icon set.
+  * Ask KWin for the pointer position on Wayland, where a client may
+    neither locate it nor place a window.
+
+ -- Tzahi Serruya <stzahi@gmail.com>  Thu, 10 Sep 2026 18:41:29 +0300

@@ -1,0 +1,8 @@
+#!/bin/sh
+set -e
+if [ "$1" = "configure" ]; then
+    udevadm control --reload-rules 2>/dev/null || true
+    udevadm trigger --subsystem-match=hidraw 2>/dev/null || true
+    systemctl --global enable mx4ctl.service mx4ctl-restore.service 2>/dev/null || true
+fi
+#DEBHELPER#

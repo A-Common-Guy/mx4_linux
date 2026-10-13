@@ -1,5 +1,9 @@
 # Logitech MX Master 4 haptics & extras for Linux
 
+<img width="758" alt="The actions ring: round buttons on a circle around the cursor, one highlighted, brightness and volume showing their level as an arc" src="https://github.com/user-attachments/assets/2c4d306b-e3c2-4c25-8112-92daa58afb30" />
+
+The actions ring on the thumb button — [see it in motion](https://drive.google.com/file/d/1ji8Y-_C-DQhqgMJjItS5vpSsWWBnK9nZ/view).
+
 The MX Master 4's headline features (haptic feedback, the thumb-panel
 "Actions Ring" button) only work with Logi Options+, which doesn't exist on
 Linux. This tool talks HID++ 2.0 directly to the mouse over `/dev/hidraw`
@@ -17,8 +21,14 @@ and brings them back:
   - desktop **notifications buzz the mouse** (per-app waveforms:
     Slack → knock, Thunderbird → jingle, …), silent during GNOME
     Do Not Disturb
-  - the **thumb button works**: short press pops an actions menu at the
-    cursor, long press runs a command — with haptic feedback
+  - the **thumb button works**: short press pops the **actions ring** at
+    the cursor — round icon buttons that spiral out of the centre, picked by
+    flicking towards one, like Logi Options+ on Windows — long press runs a
+    command, both with haptic feedback
+  - the ring carries **dials**: scroll over the brightness or volume button
+    to change it (the arc around the button is the level, a haptic tick per
+    step), click to open the settings page; the microphone button shows
+    whether the mic is live and mutes it
   - **workspace tick** — a soft buzz whenever you change workspace
   - **low-battery buzz** + notification
 
@@ -116,7 +126,7 @@ The wizard is standalone — it needs no daemon, and works fine alongside one.
 ### As a package (recommended — Ubuntu 20.04+)
 
 Grab the latest `.deb` from the
-[releases page](https://github.com/A-Common-Guy/mx4_linux/releases) —
+[releases page](https://github.com/stzahi/mx4_linux/releases) —
 every push to `main` builds, tests and publishes one, with a changelog —
 or build it yourself:
 
@@ -162,9 +172,21 @@ compositor — the packaged udev rule grants access to `/dev/uinput`), with
 an `xdotool` fallback on X11 when uinput isn't accessible. The built-ins
 press the standard GNOME shortcuts (Super+PgUp/PgDn, Super, Super+D,
 Super+H) — remap or use plain shell commands in the config for other
-desktops. The thumb-button menu appears at the cursor on X11; Wayland
-doesn't let a daemon position windows globally, so there it opens as a
-small centered action window instead. The workspace haptic tick uses
+desktops.
+
+The actions ring wants to open **at the cursor**, and a Wayland client may
+neither place a window nor ask where the pointer is. Two workarounds get it
+there anyway: the daemon runs its GTK side on the X11/XWayland backend when
+one is available (so it *can* place the window — `GDK_BACKEND=wayland` in
+the unit opts out, and the ring then opens centered), and it asks the
+compositor for the pointer, because XWayland's own answer is stale — X only
+learns the position while the pointer is over an X window. On Plasma that
+question goes to KWin: `mx4/cursor.py` loads a three-line KWin script that
+registers a shortcut ("mx4ctl: locate the pointer", listed under KWin in
+System Settings → Shortcuts, with no key bound) and reports
+`workspace.cursorPos` back over D-Bus — about 10 ms per press. Elsewhere on
+Wayland there is no such hook, so after a few silent tries the ring settles
+for opening centered. The workspace haptic tick uses
 X11/XWayland properties and may stay silent on some Wayland setups.
 After installing the .deb on Wayland, reboot (or reload udev rules and
 re-login) so the uinput permission takes effect.
@@ -172,8 +194,52 @@ re-login) so the uinput permission takes effect.
 ## Configuration
 
 See `config.example.ini` — thumb-button actions (`menu`/`command`/`none`,
-long-press timing), the popup-menu entries, per-app notification waveforms,
+long-press timing), the actions-ring entries, per-app notification waveforms,
 and battery warning threshold.
+
+### The actions ring
+
+`[menu]` entries are `label = command`, one round button each, laid out
+clockwise from the top:
+
+```ini
+[menu]
+KRunner = $rocket::dbus-send --type=method_call --dest=org.kde.krunner /App org.kde.krunner.App.display || krunner
+Screenshot = @screenshot
+Terminal = konsole
+Mute microphone = @mic-mute
+Brightness = @brightness
+Volume = @volume
+```
+
+Three values are the ring's own, not shell commands:
+
+| value | what the button does |
+| --- | --- |
+| `@brightness` | scroll to dim or brighten; the arc around it is the level, a full circle at 100%. Clicking opens the brightness settings. |
+| `@volume` | the same, for the default output. |
+| `@mic-mute` | clicking mutes or unmutes the microphone, and the icon shows what the click would do: a live mic wears the slash, a muted one doesn't. |
+
+Brightness goes through KDE's PowerDevil where there is one and
+`brightnessctl` otherwise; volume and the microphone through `wpctl`, else
+`pactl`. Whichever answers first is the one used, and a dial that nothing
+can answer simply draws as an ordinary button.
+
+Icons are drawn rather than themed — one set on a 24px grid, so a ring of
+eight buttons reads as one family — and picked from each entry's label and
+command (`Terminal` → a terminal, `@screenshot` → a camera, …). To choose
+one yourself, prefix the value with `icon::`: a glyph name (`$rocket`
+`$brightness` `$volume` `$terminal` `$lock` `$camera` `$play` `$mic` `$grid`
+`$monitor` `$minimize` `$search` `$folder` `$mail` `$globe` `$chat` `$next`
+`$prev` `$sliders` `$copy` `$pencil`) or any icon-theme name. An entry that
+matches nothing falls back to its initial.
+
+Selection is angular, like a pie menu: the entry nearest the direction you
+flick in lights up — growing a tenth, its label in the pill underneath —
+and a click runs it, so the pointer never has to land inside the small
+circle. Clicking past the ring dismisses it, as do the `×` in the middle
+and `Esc`; `1`-`9` pick an entry directly. `menu_scale` in `[button]` grows
+the whole thing on a hidpi screen.
 
 ## Protocol notes (HID++ 2.0)
 

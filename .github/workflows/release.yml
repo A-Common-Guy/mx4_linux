@@ -6,6 +6,9 @@ name: release
 on:
   push:
     branches: [main]
+  # so a release can also be cut by hand from the Actions tab — a fork with
+  # Actions freshly enabled has no push to replay
+  workflow_dispatch:
 
 permissions:
   contents: write

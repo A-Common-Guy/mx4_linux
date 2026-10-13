@@ -19,44 +19,11 @@ install -m 755 mx4-wizard "$STAGE/usr/bin/mx4-wizard"
 install -m 644 config.example.ini "$STAGE/usr/share/mx4ctl/"
 install -m 644 README.md "$STAGE/usr/share/doc/mx4ctl/"
 
-cat > "$STAGE/usr/lib/systemd/user/mx4ctl.service" <<'EOF'
-[Unit]
-Description=MX Master 4 haptics & extras daemon (mx4ctl)
-After=graphical-session.target
-
-[Service]
-Type=simple
-ExecStart=/usr/bin/mx4ctl daemon
-Restart=on-failure
-RestartSec=5
-
-[Install]
-WantedBy=graphical-session.target
-EOF
-
-cat > "$STAGE/usr/lib/systemd/user/mx4ctl-restore.service" <<'EOF'
-[Unit]
-Description=Restore MX Master 4 settings
-After=graphical-session.target
-
-[Service]
-Type=oneshot
-ExecStart=/usr/bin/mx4-wizard --restore
-
-[Install]
-WantedBy=graphical-session.target
-EOF
-
-# hidraw access for logged-in users (USB receiver and Bluetooth), and
-# uinput for the virtual keyboard that backs @built-in actions on Wayland.
-# The mouse-side settings saved by mx4-wizard are volatile, so replay them
-# whenever the device (re)appears.
-cat > "$STAGE/usr/lib/udev/rules.d/42-mx4ctl.rules" <<'EOF'
-ACTION=="add", SUBSYSTEM=="hidraw", ATTRS{idVendor}=="046d", MODE="0660", TAG+="uaccess"
-ACTION=="add", SUBSYSTEM=="hidraw", KERNELS=="0005:046D:*", MODE="0660", TAG+="uaccess"
-KERNEL=="uinput", SUBSYSTEM=="misc", MODE="0660", TAG+="uaccess", OPTIONS+="static_node=uinput"
-ACTION=="add", SUBSYSTEM=="hidraw", ATTRS{idVendor}=="046d", TAG+="systemd", ENV{SYSTEMD_USER_WANTS}+="mx4ctl-restore.service"
-EOF
+# the units and the udev rule live in packaging/files, so this script and the
+# debian/ source package (for the PPA) install the very same ones
+install -m 644 packaging/files/mx4ctl.service packaging/files/mx4ctl-restore.service \
+        "$STAGE/usr/lib/systemd/user/"
+install -m 644 packaging/files/42-mx4ctl.rules "$STAGE/usr/lib/udev/rules.d/"
 
 # -- control files ----------------------------------------------------------
 install -d "$STAGE/DEBIAN"

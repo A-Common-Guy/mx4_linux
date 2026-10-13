@@ -18,13 +18,20 @@ import sys
 import time
 from pathlib import Path
 
-import gi
+# The ring belongs at the cursor, and only an X11/XWayland window can be put
+# there by a daemon. PyGObject opens the display the moment gi.repository.Gtk
+# is imported, so the backend has to be chosen up here, before that happens.
+# GDK_BACKEND=wayland in the environment opts out (the ring then opens centred).
+if os.environ.get("WAYLAND_DISPLAY") and os.environ.get("DISPLAY"):
+    os.environ.setdefault("GDK_BACKEND", "x11")
+
+import gi  # noqa: E402
 
 gi.require_version("Gtk", "3.0")
 gi.require_version("Gdk", "3.0")
 from gi.repository import Gdk, Gio, GLib, Gtk  # noqa: E402
 
-from . import hidpp, uinput  # noqa: E402
+from . import cursor, hidpp, levels, ring, uinput  # noqa: E402
 from .mouse import CONTROLS, MX4, parse_waveform  # noqa: E402
 
 DEFAULT_CONFIG = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "mx4ctl" / "config.ini"
@@ -61,6 +68,7 @@ DEFAULTS = {
         "long_press_waveform": "knock",
         "long_press_ms": "450",
         "menu_select_waveform": "damp_state_change",
+        "menu_scale": "1.0",
         "force_threshold": "",
     },
     "notifications": {"enabled": "true", "respect_dnd": "true", "default": "subtle_collision"},
@@ -108,9 +116,21 @@ class Daemon:
         self.gest_y = 0
         self.dnd_settings = None
         self.keyboard = None  # lazily created uinput device; False = unavailable
+        self._ring = None     # the open actions ring, if any
+        self.dials = levels.Dials(self.log)
         display = Gdk.Display.get_default()
-        self.is_wayland = (display and "wayland" in type(display).__name__.lower()) or (
-            display is None and bool(os.environ.get("WAYLAND_DISPLAY")))
+        # the session type decides how keys are injected; the GDK backend (which
+        # may be XWayland — see run()) decides whether the ring can be placed
+        self.is_wayland = bool(os.environ.get("WAYLAND_DISPLAY")) or bool(
+            display and "wayland" in type(display).__name__.lower())
+        self.gdk_wayland = bool(display and "wayland" in type(display).__name__.lower())
+        # on wayland only the compositor knows where the pointer is (and only
+        # an X11/XWayland window can be put there) — see mx4/cursor.py
+        self.cursor = None
+        if self.is_wayland and not self.gdk_wayland:
+            self.cursor = cursor.KWinCursor(self.log)
+        elif self.gdk_wayland:
+            self.log("actions ring: centred — a native wayland client cannot place a window")
         self.loop = GLib.MainLoop()
 
     def _seed_config(self, path: Path) -> None:
@@ -343,58 +363,56 @@ class Daemon:
             self.log(f"command failed: {e}")
 
     def _show_menu(self) -> None:
-        items = list(self.cfg["menu"].items()) if self.cfg.has_section("menu") else []
-        if not items:
+        raw = list(self.cfg["menu"].items()) if self.cfg.has_section("menu") else []
+        if not raw:
             self.log("menu action but no [menu] entries in config")
             return
-        display = Gdk.Display.get_default()
-        if display is None:
+        if Gdk.Display.get_default() is None:
             self.log("menu: no display available")
             return
-        if getattr(self, "_menu", None):
-            self._menu.destroy()
-        if self.is_wayland:
-            self._menu = self._menu_window(items)
-            return
-        menu = Gtk.Menu()
-        for label, command in items:
-            item = Gtk.MenuItem(label=label)
-            item.connect("activate", self._on_menu_pick, command)
-            menu.append(item)
-        menu.show_all()
-        self._menu = menu  # keep referenced — an unreferenced menu is destroyed
-        # a daemon has no GDK trigger event, so popup_at_pointer() can't find
-        # the pointer window; anchor to the root window at the pointer instead
-        screen, x, y = display.get_default_seat().get_pointer().get_position()
-        rect = Gdk.Rectangle()
-        rect.x, rect.y, rect.width, rect.height = x, y, 1, 1
-        menu.popup_at_rect(screen.get_root_window(), rect,
-                           Gdk.Gravity.NORTH_WEST, Gdk.Gravity.NORTH_WEST, None)
+        if getattr(self, "_ring", None):
+            self._ring.destroy()
+            self._ring = None
+        items = [ring.parse_entry(label, value) for label, value in raw]
+        try:
+            scale = float(self.cfg["button"]["menu_scale"] or 1.0)
+        except ValueError:
+            scale = 1.0
+        self._ring = ring.ActionRing(items, lambda command: self._on_menu_pick(None, command),
+                                     on_level=self._on_menu_level, scale=scale)
+        self._ring.connect("destroy", lambda _w: setattr(self, "_ring", None))
+        self._ring.pop_up(self._pointer())
+        # reading a level blocks on a subprocess or two; doing that while the
+        # ring is spiralling open costs it frames, so it waits for the landing
+        GLib.timeout_add(int(ring.OPEN_MS) + 60, self._read_levels, self._ring)
 
-    def _menu_window(self, items) -> Gtk.Window:
-        """Wayland can't place menus at global coordinates from a daemon —
-        show a small centered action window instead."""
-        win = Gtk.Window(title="MX4 actions")
-        win.set_decorated(False)
-        win.set_resizable(False)
-        win.set_skip_taskbar_hint(True)
-        win.set_keep_above(True)
-        win.set_position(Gtk.WindowPosition.CENTER)
-        win.set_type_hint(Gdk.WindowTypeHint.DIALOG)
-        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
-        box.set_property("margin", 8)
-        for label, command in items:
-            button = Gtk.Button(label=label)
-            button.connect("clicked", lambda _b, c=command: (self._on_menu_pick(None, c), win.destroy()))
-            box.pack_start(button, False, False, 0)
-        win.add(box)
-        win.connect("key-press-event",
-                    lambda _w, ev: win.destroy() if ev.keyval == Gdk.KEY_Escape else None)
-        win.connect("focus-out-event", lambda *_: win.destroy())
-        GLib.timeout_add_seconds(10, lambda: (win.destroy(), False)[1])  # safety auto-close
-        win.show_all()
-        win.present()
-        return win
+    def _read_levels(self, opened) -> bool:
+        """What a dial or toggle stands at costs a subprocess or two to find
+        out — ask once the ring is already up, so it opens without the wait
+        and the arcs sweep up to their level instead of appearing at it."""
+        if opened is not self._ring:
+            return False
+        for entry in opened.items:
+            if entry.dial:
+                entry.level = self.dials.read(entry.dial)
+            elif entry.toggle == "mic":
+                entry.state = self.dials.mic_muted()
+        opened.refresh()
+        return False
+
+    def _pointer(self) -> tuple[int, int] | None:
+        """Where to centre the ring: X11 knows; on Wayland KWin has to be
+        asked; anywhere else it opens centred."""
+        if self.cursor is not None:
+            return self.cursor.position()
+        if self.gdk_wayland:
+            return None
+        return cursor.gdk_pointer()
+
+    def _on_menu_level(self, entry, value: float) -> None:
+        """A dial was scrolled: move it, and tick under the thumb."""
+        self.dials.write(entry.dial, value)
+        self.play(self.cfg["button"]["menu_select_waveform"])
 
     def _on_menu_pick(self, _item, command: str) -> None:
         self.play(self.cfg["button"]["menu_select_waveform"])
@@ -537,6 +555,8 @@ class Daemon:
         GLib.timeout_add_seconds(300, self._check_battery)
         for sig in (signal.SIGINT, signal.SIGTERM):
             GLib.unix_signal_add(GLib.PRIORITY_HIGH, sig, self._quit)
+        if self.cursor is not None:
+            self.cursor.start()
         self.log("mx4ctl daemon running")
         try:
             self.loop.run()

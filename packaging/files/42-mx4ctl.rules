@@ -1,0 +1,8 @@
+# hidraw access for logged-in users (USB receiver and Bluetooth), and
+# uinput for the virtual keyboard that backs @built-in actions on Wayland.
+# The mouse-side settings saved by mx4-wizard are volatile, so replay them
+# whenever the device (re)appears.
+ACTION=="add", SUBSYSTEM=="hidraw", ATTRS{idVendor}=="046d", MODE="0660", TAG+="uaccess"
+ACTION=="add", SUBSYSTEM=="hidraw", KERNELS=="0005:046D:*", MODE="0660", TAG+="uaccess"
+KERNEL=="uinput", SUBSYSTEM=="misc", MODE="0660", TAG+="uaccess", OPTIONS+="static_node=uinput"
+ACTION=="add", SUBSYSTEM=="hidraw", ATTRS{idVendor}=="046d", TAG+="systemd", ENV{SYSTEMD_USER_WANTS}+="mx4ctl-restore.service"
