@@ -237,3 +237,35 @@ class KWinCursor:
         if vh > 0 and sh > 0:
             y *= sh / vh
         return int(round(x)), int(round(y))
+
+
+class GnomeCursor:
+    """Pointer position from the mx4ctl-cursor GNOME Shell extension, over
+    D-Bus. Same interface as KWinCursor; None when the extension isn't there."""
+
+    UUID = "mx4ctl-cursor@mx4ctl"
+
+    def __init__(self, log=print):
+        self.log = log
+        self.ready = False
+        self.warned = False
+
+    def start(self) -> bool:
+        return True
+
+    def position(self, timeout_ms: int = 250) -> tuple[int, int] | None:
+        from gi.repository import Gio
+        try:
+            reply = Gio.DBusProxy.new_for_bus_sync(
+                Gio.BusType.SESSION, Gio.DBusProxyFlags.DO_NOT_LOAD_PROPERTIES, None,
+                BUS_NAME, OBJ_PATH, INTERFACE, None).call_sync(
+                "GetPosition", None, Gio.DBusCallFlags.NONE, timeout_ms, None)
+            self.ready = True
+            return KWinCursor._to_x_pixels(reply.unpack()[0])
+        except GLib.Error as e:
+            if not self.warned:
+                self.warned = True
+                self.log(f"gnome cursor extension not answering ({e.message}) — the ring "
+                         f"opens centred; run install.sh, then log out and in, and "
+                         f"gnome-extensions enable {self.UUID}")
+            return None

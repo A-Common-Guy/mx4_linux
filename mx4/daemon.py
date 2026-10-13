@@ -128,7 +128,8 @@ class Daemon:
         # an X11/XWayland window can be put there) — see mx4/cursor.py
         self.cursor = None
         if self.is_wayland and not self.gdk_wayland:
-            self.cursor = cursor.KWinCursor(self.log)
+            gnome = "gnome" in os.environ.get("XDG_CURRENT_DESKTOP", "").lower()
+            self.cursor = (cursor.GnomeCursor if gnome else cursor.KWinCursor)(self.log)
         elif self.gdk_wayland:
             self.log("actions ring: centred — a native wayland client cannot place a window")
         self.loop = GLib.MainLoop()

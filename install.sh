@@ -10,6 +10,12 @@ ln -sf "$PWD/mx4-wizard" ~/.local/bin/mx4-wizard
 [ -f ~/.config/mx4ctl/config.ini ] || cp config.example.ini ~/.config/mx4ctl/config.ini
 # point the unit at wherever this checkout actually lives
 sed "s|^ExecStart=.*|ExecStart=$PWD/mx4ctl daemon|" mx4ctl.service > ~/.config/systemd/user/mx4ctl.service
+# GNOME Wayland: the ring finds the pointer through this small shell extension
+EXT=mx4ctl-cursor@mx4ctl
+mkdir -p ~/.local/share/gnome-shell/extensions
+rm -rf ~/.local/share/gnome-shell/extensions/$EXT
+cp -r "gnome-extension/$EXT" ~/.local/share/gnome-shell/extensions/
+gnome-extensions enable $EXT 2>/dev/null || true
 systemctl --user daemon-reload
 systemctl --user enable mx4ctl.service
 systemctl --user restart mx4ctl.service
