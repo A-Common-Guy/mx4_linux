@@ -3,6 +3,8 @@ Description=Restore MX Master 4 settings
 After=graphical-session.target
 
 [Service]
+# the units are enabled globally; skip system users such as the GDM greeter
+ExecCondition=/bin/sh -c '[ "$(id -u)" -ge 1000 ]'
 Type=oneshot
 ExecStart=/usr/bin/mx4-wizard --restore
 

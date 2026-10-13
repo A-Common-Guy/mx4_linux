@@ -388,8 +388,8 @@ BIN_LINK = pathlib.Path.home() / ".local" / "bin" / "mx4-wizard"
 
 ACCESS_RULE_TEXT = (
     '# Logitech HID++ devices readable by the logged-in user (mx4ctl / mx4-wizard)\n'
-    'ACTION=="add", SUBSYSTEM=="hidraw", ATTRS{idVendor}=="046d", MODE="0660", TAG+="uaccess"\n'
-    'ACTION=="add", SUBSYSTEM=="hidraw", KERNELS=="0005:046D:*", MODE="0660", TAG+="uaccess"\n'
+    'SUBSYSTEM=="hidraw", ATTRS{idVendor}=="046d", MODE="0660", TAG+="uaccess"\n'
+    'SUBSYSTEM=="hidraw", KERNELS=="0005:046D:*", MODE="0660", TAG+="uaccess"\n'
 )
 RECONNECT_RULE_TEXT = (
     '# DPI is volatile and is lost whenever the mouse drops its connection\n'

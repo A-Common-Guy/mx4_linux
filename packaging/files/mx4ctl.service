@@ -3,6 +3,8 @@ Description=MX Master 4 haptics & extras daemon (mx4ctl)
 After=graphical-session.target
 
 [Service]
+# the units are enabled globally; skip system users such as the GDM greeter
+ExecCondition=/bin/sh -c '[ "$(id -u)" -ge 1000 ]'
 Type=simple
 ExecStart=/usr/bin/mx4ctl daemon
 Restart=on-failure
