@@ -18,6 +18,10 @@ and brings them back:
   - **mouse gestures**: hold the gesture button and flick — left/right
     switch workspaces, up shows the desktop, down minimizes, tap opens the
     overview (all configurable), each with haptic confirmation
+  - **touchpad-style swipes on the thumb button**: hold it and move the
+    mouse — workspaces slide with your hand and the overview opens as you
+    push up, exactly like a three-finger touchpad swipe (1:1 tracking,
+    momentum on release). A plain tap still does the button's normal action
   - desktop **notifications buzz the mouse** (per-app waveforms:
     Slack → knock, Thunderbird → jingle, …), silent during GNOME
     Do Not Disturb
@@ -250,6 +254,39 @@ re-login) so the uinput permission takes effect.
 See `config.example.ini` — thumb-button actions (`menu`/`command`/`none`,
 long-press timing), the actions-ring entries, per-app notification waveforms,
 and battery warning threshold.
+
+### Thumb swipes
+
+Hold the thumb button and move the mouse: the daemon replays the motion on a
+virtual touchpad (`mx4/touchpad.py`, uinput) as a three-finger swipe, so the
+desktop runs its own touchpad gesture — the workspace follows your hand and
+settles with momentum when you let go, the overview opens as you push up.
+The pointer stays put while the button is held. A press that doesn't move
+is still a tap (the button's `press` action); a long press acts on release,
+and only if the hold didn't turn into a swipe.
+
+Getting the start right matters: GNOME commits to workspaces (sideways) or
+overview (up/down) after about 0.4 mm of finger motion, so the direction is
+taken from where the hand is heading once the motion is clearly one way —
+not from the nudge of pressing the button, nor from a curved start
+(`mx4/swipe.py`). A quick flick that ends before the swipe would begin is
+still played out as a swipe.
+
+`[gestures]` keys:
+
+| key | default | |
+| --- | --- | --- |
+| `thumb_mode` | `touchpad` | `touchpad`; `keys` runs `left`/`right`/`up`/`down` on release; `off` leaves the button a plain button (the pointer keeps moving while it is held) |
+| `thumb_gain` | `1.5` | finger travel per unit of mouse travel — raise it if a workspace needs too long a push |
+| `thumb_start` | `100` | sensor counts of travel before a swipe begins (~2.5 mm at 1000 dpi) |
+| `thumb_axis_lock` | `true` | once a swipe begins, ignore motion across it |
+| `thumb_fingers` | `auto` | `auto` is 4 on KDE Plasma (KWin's desktop swipes), 3 elsewhere |
+| `thumb_invert` | `false` | flip the direction (it otherwise follows your touchpad scroll-direction setting, like a real touchpad) |
+
+Tested on GNOME 51 / Wayland (Fedora 45) through the Bolt receiver. The
+virtual touchpad shows up in Settings → Mouse & Touchpad; turning touchpads
+off there turns the swipes off too. `mx4ctl daemon -v` logs one line per
+swipe and tap, handy when tuning.
 
 ### The actions ring
 

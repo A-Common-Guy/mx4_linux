@@ -31,7 +31,8 @@ gi.require_version("Gtk", "3.0")
 gi.require_version("Gdk", "3.0")
 from gi.repository import Gdk, Gio, GLib, Gtk  # noqa: E402
 
-from . import cursor, hidpp, levels, ring, uinput  # noqa: E402
+from . import cursor, hidpp, levels, ring, touchpad, uinput  # noqa: E402
+from .swipe import SwipeConfig, ThumbSwipe  # noqa: E402
 from .mouse import CONTROLS, MX4, parse_waveform  # noqa: E402
 
 DEFAULT_CONFIG = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "mx4ctl" / "config.ini"
@@ -56,6 +57,10 @@ BUILTIN_X11 = {
     "screenshot": "xdotool key Print",
     "play-pause": "xdotool key XF86AudioPlay",
 }
+
+SWIPE_GRACE_MS = 80  # a thumb re-press within this continues the swipe
+SWIPE_DRAIN_MAX_MS = 150  # stop waiting for queued motion after this
+SWIPE_MAX_S = 10  # a hold this long is a lost release: lift the fingers
 
 DEFAULTS = {
     "haptics": {"level": ""},
@@ -82,6 +87,18 @@ DEFAULTS = {
         "up": "@show-desktop",
         "down": "@minimize",
         "tap": "@overview",
+        # thumb button held + mouse moved. "touchpad": a virtual touchpad
+        # replays the motion as a multi-finger swipe, so the desktop runs its
+        # own gesture (1:1 tracking, momentum) — workspaces left/right,
+        # overview up. "keys": the left/right/up/down actions above, on
+        # release. "off": the thumb button only presses (the pointer keeps
+        # moving while it is held).
+        "thumb_mode": "touchpad",
+        "thumb_fingers": "auto",  # auto: 4 on KDE Plasma, 3 elsewhere (GNOME)
+        "thumb_gain": "1.5",  # virtual finger travel per sensor count
+        "thumb_start": "100",  # sensor counts of travel before a swipe begins
+        "thumb_axis_lock": "true",  # once begun, ignore motion across the swipe
+        "thumb_invert": "false",  # flip the swipe direction
     },
     "workspace": {"enabled": "true", "waveform": "whisper_collision"},
 }
@@ -107,6 +124,27 @@ class Daemon:
         self.ctl_idx = 0
         self.watch_id = 0
         self.keys_down: set[int] = set()
+        self.thumb_swipe = False  # the thumb button is held
+        self.thumb_mode = self.cfg["gestures"]["thumb_mode"].strip().lower()
+        self.touchpad = None
+        self.swipe: ThumbSwipe | None = None
+        self.touch_timer = 0
+        self.lift_timer = 0  # grace period after a thumb release mid-swipe
+        self.swipe_t0 = 0.0
+        self.swipe_repress = 0
+        self.long_armed = False  # long press reached; acts on release unless it swipes
+        if self.thumb_mode == "touchpad":
+            try:
+                self.touchpad = touchpad.VirtualTouchpad()
+                g = self.cfg["gestures"]
+                self.swipe = ThumbSwipe(SwipeConfig(
+                    start=g.getint("thumb_start"), gain=g.getfloat("thumb_gain"),
+                    axis_lock=g.getboolean("thumb_axis_lock")))
+                self.swipe_sign = -1 if g.getboolean("thumb_invert") else 1
+                self.log(f"virtual touchpad created (uinput, {self._thumb_fingers()} fingers)")
+            except OSError as e:
+                self.thumb_mode = "keys"
+                self.log(f"cannot create virtual touchpad ({e}) — thumb swipes fall back to keys")
         self.long_timer = 0
         self.long_fired = False
         self.last_play = 0.0
@@ -183,7 +221,7 @@ class Daemon:
                 m.set_force(int(force))
             except (ValueError, hidpp.HidppError) as e:
                 self.log(f"force_threshold not applied: {e}")
-        m.divert(CONTROLS["haptic"], True)
+        m.divert(CONTROLS["haptic"], True, raw_xy=self.thumb_mode != "off")
         if self.cfg["gestures"].getboolean("enabled"):
             m.divert(CONTROLS["gesture"], True, raw_xy=True)
         self.debug("buttons diverted, settings applied")
@@ -209,6 +247,7 @@ class Daemon:
         return False  # one-shot; retries are scheduled explicitly
 
     def _reconnect_later(self) -> None:
+        self._swipe_abort("mouse lost")
         if self.watch_id:
             GLib.source_remove(self.watch_id)
             self.watch_id = 0
@@ -239,6 +278,7 @@ class Daemon:
             return
         # receiver "device connection" notification: diversion was reset
         if data[0] == hidpp.REPORT_SHORT and data[2] == 0x41:
+            self._swipe_abort("mouse reconnected")
             GLib.timeout_add(1500, self._reinit)
             return
         if data[0] != hidpp.REPORT_LONG or (data[3] & 0x0F) != 0x00:
@@ -250,21 +290,142 @@ class Daemon:
                 dx, dy = MX4.decode_raw_xy(data[4:])
                 self.gest_x += dx
                 self.gest_y += dy
+                if self.thumb_swipe and self.swipe:
+                    self._thumb_motion(dx, dy)
+                # a swipe on the thumb button must not also fire its long press
+                elif self.thumb_swipe and self.long_timer and self._moved():
+                    self._cancel_long_press()
 
     def _on_keys(self, now_down: set[int]) -> None:
         for cid in now_down - self.keys_down:
-            if cid == CONTROLS["haptic"]:
+            if cid == CONTROLS["haptic"] and self.lift_timer:
+                # the force panel dipped under its threshold mid-swipe: same swipe
+                GLib.source_remove(self.lift_timer)
+                self.lift_timer = 0
+                self.gesturing = self.thumb_swipe = True
+                self.swipe_repress += 1
+            elif cid == CONTROLS["haptic"]:
+                self.gesturing = self.thumb_swipe = True
+                self.gest_x = self.gest_y = 0
+                if self.swipe:
+                    self.swipe.press(time.monotonic())
                 self._on_press()
             elif cid == CONTROLS["gesture"]:
                 self.gesturing = True
                 self.gest_x = self.gest_y = 0
         for cid in self.keys_down - now_down:
             if cid == CONTROLS["haptic"]:
-                self._on_release()
+                self.gesturing = self.thumb_swipe = False
+                if self.swipe:
+                    self._thumb_release()
+                elif self.thumb_mode == "keys" and self._moved():
+                    self._cancel_long_press()
+                    self._on_gesture()
+                else:
+                    self._on_release()
             elif cid == CONTROLS["gesture"]:
                 self.gesturing = False
                 self._on_gesture()
         self.keys_down = now_down
+
+    def _cancel_long_press(self) -> None:
+        if self.long_timer:
+            GLib.source_remove(self.long_timer)
+            self.long_timer = 0
+        self.long_fired = True
+
+    def _thumb_motion(self, dx: int, dy: int) -> None:
+        """Held thumb button + motion: start or continue a touchpad swipe."""
+        result = self.swipe.motion(time.monotonic(), dx, dy)
+        if result is None:
+            return
+        kind, fx, fy = result
+        if kind == "begin":
+            self._swipe_begin(fx, fy)
+        else:
+            self.touchpad.queue(fx * self.swipe_sign, fy * self.swipe_sign)
+
+    def _thumb_release(self) -> None:
+        kind, fx, fy = self.swipe.release()
+        if kind == "tap":
+            self.debug(f"thumb tap: moved dx={self.gest_x} dy={self.gest_y}")
+            if self.long_armed:
+                self.long_armed = False
+                b = self.cfg["button"]
+                self._run_action(b["long_press"], "", b["long_press_command"])  # buzzed when armed
+            else:
+                self._on_release()
+            return
+        if kind == "flick":
+            # a quick swipe that ended before it began: play it out now
+            self._swipe_begin(fx, fy)
+        # keep the fingers down briefly: queued motion drains, and a quick
+        # re-press continues the swipe
+        self.lift_timer = GLib.timeout_add(SWIPE_GRACE_MS, self._lift_fingers, time.monotonic())
+
+    def _thumb_fingers(self) -> int:
+        value = self.cfg["gestures"]["thumb_fingers"].strip().lower()
+        if value in ("", "auto"):
+            # KWin's default desktop swipes are four-finger; GNOME's are three
+            return 4 if "KDE" in os.environ.get("XDG_CURRENT_DESKTOP", "").upper() else 3
+        try:
+            return min(4, max(3, int(value)))
+        except ValueError:
+            return 3
+
+    def _swipe_begin(self, fx: float, fy: float) -> None:
+        self._cancel_long_press()
+        self.long_armed = False
+        self.touchpad.down(self._thumb_fingers())
+        self.touchpad.queue(fx * self.swipe_sign, fy * self.swipe_sign)
+        self.touch_timer = GLib.timeout_add(touchpad.FRAME_MS, self._touch_tick)
+        self.swipe_t0 = time.monotonic()
+        self.swipe_repress = 0
+
+    def _touch_tick(self) -> bool:
+        if time.monotonic() - self.swipe_t0 > SWIPE_MAX_S:
+            self.touch_timer = 0  # this source ends by returning False
+            self._swipe_abort("held too long")
+            return False
+        self.touchpad.tick()
+        return True
+
+    def _lift_fingers(self, released: float) -> bool:
+        """End a thumb swipe once its queued motion has drained."""
+        waited_ms = (time.monotonic() - released) * 1000
+        if self.touchpad.pending >= 1 and waited_ms < SWIPE_DRAIN_MAX_MS:
+            # poll again next frame; lift_timer stays set so a re-press still continues
+            self.lift_timer = GLib.timeout_add(touchpad.FRAME_MS, self._lift_fingers, released)
+            return False
+        self.lift_timer = 0
+        if self.touch_timer:
+            GLib.source_remove(self.touch_timer)
+            self.touch_timer = 0
+        tp = self.touchpad
+        self.debug(f"thumb swipe {self.swipe.axis or 'free'}: "
+                   f"{(released - self.swipe_t0) * 1000:.0f} ms, counts dx={self.gest_x} dy={self.gest_y}, "
+                   f"{tp.frames} frames, peak {tp.max_step / touchpad.RES:.1f} mm/frame, "
+                   f"undrained {tp.pending / touchpad.RES:.1f} mm, re-presses {self.swipe_repress}")
+        tp.up()
+        self.swipe.reset()
+        return False
+
+    def _swipe_abort(self, reason: str) -> None:
+        """Lift the virtual fingers now — a gesture must never stay stuck."""
+        for name in ("touch_timer", "lift_timer"):
+            source = getattr(self, name, 0)
+            if source:
+                GLib.source_remove(source)
+                setattr(self, name, 0)
+        if self.touchpad and self.touchpad.active:
+            self.touchpad.up()
+            self.log(f"thumb swipe aborted: {reason}")
+        if self.swipe:
+            self.swipe.reset()
+
+    def _moved(self) -> bool:
+        threshold = self.cfg["gestures"].getint("threshold")
+        return abs(self.gest_x) >= threshold or abs(self.gest_y) >= threshold
 
     def _on_gesture(self) -> None:
         gx, gy, cfg = self.gest_x, self.gest_y, self.cfg["gestures"]
@@ -299,6 +460,11 @@ class Daemon:
     def _on_long_press(self) -> bool:
         self.long_timer = 0
         self.long_fired = True
+        if self.swipe:
+            # the hold may still become a swipe: buzz now, act on release
+            self.play(self.cfg["button"]["long_press_waveform"])
+            self.long_armed = True
+            return False
         self._run_action(self.cfg["button"]["long_press"], self.cfg["button"]["long_press_waveform"],
                          self.cfg["button"]["long_press_command"])
         return False
@@ -516,7 +682,7 @@ class Daemon:
         if not self.mouse or self.keys_down or self.gesturing:
             return True  # don't rewrite flags mid-press
         try:
-            self.mouse.divert(CONTROLS["haptic"], True)
+            self.mouse.divert(CONTROLS["haptic"], True, raw_xy=self.thumb_mode != "off")
             if self.cfg["gestures"].getboolean("enabled"):
                 self.mouse.divert(CONTROLS["gesture"], True, raw_xy=True)
         except OSError:
@@ -562,6 +728,9 @@ class Daemon:
         try:
             self.loop.run()
         finally:
+            self._swipe_abort("stopping")
+            if self.touchpad:
+                self.touchpad.close()
             if self.mouse:
                 for name in ("haptic", "gesture"):
                     try:
