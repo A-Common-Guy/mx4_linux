@@ -270,7 +270,9 @@ overview (up/down) after about 0.4 mm of finger motion, so the direction is
 taken from where the hand is heading once the motion is clearly one way —
 not from the nudge of pressing the button, nor from a curved start
 (`mx4/swipe.py`). A quick flick that ends before the swipe would begin is
-still played out as a swipe.
+still played out as a swipe — unless the mouse was already moving when the
+button went down: a short press on the move is a tap, since the hand was
+on its way somewhere and tapped on the way.
 
 `[gestures]` keys:
 

@@ -14,81 +14,117 @@ from mx4.swipe import SwipeConfig, ThumbSwipe
 REPORT_S = 0.008
 
 
+STILL = [(0, 1)] * 4  # a press from rest: the nudge, then the settle window passes
+
+
 def hold(reports, cfg=None):
     """Press, feed (dx, dy) reports 8 ms apart; return the swipe and its results."""
     s = ThumbSwipe(cfg or SwipeConfig())
     s.press(0.0)
     results = [s.motion((i + 1) * REPORT_S, dx, dy) for i, (dx, dy) in enumerate(reports)]
+    s.released = (len(reports) + 1) * REPORT_S  # when a release right after would land
     return s, [r for r in results if r]
+
+
+def let_go(s):
+    return s.release(s.released)
 
 
 class SwipeStart(unittest.TestCase):
     def test_still_press_is_a_tap(self):
         s, results = hold([(0, -1), (0, 0)])
         self.assertEqual(results, [])
-        self.assertEqual(s.release()[0], "tap")
+        self.assertEqual(let_go(s)[0], "tap")
 
-    def test_quick_flick_released_before_start(self):
-        # logged: 664 counts left inside the first report window, then released
-        s, results = hold([(-664, -74)])
-        self.assertEqual(results, [])
-        kind, x, y = s.release()
-        self.assertEqual(kind, "flick")
-        self.assertLess(x, 0)
-        self.assertEqual(y, 0)  # axis lock drops the cross motion
+    def test_quick_flick_from_rest_begins_at_once(self):
+        # from rest, 664 counts left in one report: the swipe starts on that
+        # report, so a release right after ends a running swipe
+        s, results = hold(STILL + [(-664, -74)])
+        self.assertEqual(results[0][0], "begin")
+        self.assertLess(results[0][1], 0)
+        self.assertEqual(results[0][2], 0)  # axis lock drops the cross motion
+        self.assertEqual(let_go(s)[0], "end")
 
     def test_big_diagonal_flick_is_not_a_tap(self):
-        # logged: a 45-degree-ish flick released before the direction was clear
-        s, results = hold([(-321, 250)])
+        # from rest, a 45-degree-ish flick released before the direction was clear
+        s, results = hold(STILL + [(-321, 250)])
         self.assertEqual(results, [])
-        kind, x, y = s.release()
+        kind, x, y = let_go(s)
         self.assertEqual(kind, "flick")
         self.assertLess(x, 0)
         self.assertEqual(y, 0)
 
+    def test_tap_on_the_move_is_a_tap(self):
+        # logged: the hand was crossing the screen and tapped on the way —
+        # 800 counts in a 100 ms press used to be played out as a flick
+        s, results = hold([(-70, 20)] * 12)
+        self.assertEqual(results, [])
+        self.assertTrue(s.rolling)
+        self.assertEqual(let_go(s)[0], "tap")
+
+    def test_fast_tap_on_the_move_is_a_tap(self):
+        # logged: one 664-count report right after the press, then released
+        s, results = hold([(-664, -74)])
+        self.assertEqual(results, [])
+        self.assertEqual(let_go(s)[0], "tap")
+
+    def test_press_on_the_move_held_on_becomes_a_swipe(self):
+        s, results = hold([(-70, 20)] * 25)  # 200 ms: still a tap
+        self.assertEqual(results, [])
+        s, results = hold([(-70, 20)] * 40)  # 320 ms: the hold went on
+        self.assertEqual(results[0][0], "begin")
+        self.assertEqual(s.axis, "x")
+        self.assertLess(results[0][1], 0)
+        self.assertEqual(let_go(s)[0], "end")
+
+    def test_press_nudge_is_not_rolling(self):
+        s, results = hold([(1, 6)] * 3 + [(80, -5)] * 10)
+        self.assertFalse(s.rolling)
+        self.assertEqual(results[0][0], "begin")
+
     def test_press_nudge_does_not_pick_the_direction(self):
         # thumb press nudges the mouse down, then the hand swipes right
-        s, results = hold([(2, 30)] * 3 + [(80, -5)] * 10)
+        s, results = hold([(1, 6)] * 3 + [(80, -5)] * 10)
         kind, x, y = results[0]
         self.assertEqual(kind, "begin")
         self.assertEqual(s.axis, "x")
         self.assertGreater(x, 0)
 
     def test_vertical_swipe_up(self):
-        s, results = hold([(-3, -60)] * 10)
+        s, results = hold(STILL + [(-3, -60)] * 10)
         self.assertEqual(results[0][0], "begin")
         self.assertEqual(s.axis, "y")
         self.assertLess(results[0][2], 0)
 
     def test_slow_swipe_starts(self):
-        s, results = hold([(15, 1)] * 40)
+        s, results = hold(STILL + [(15, 1)] * 40)
         self.assertTrue(results)
         self.assertEqual(s.axis, "x")
 
     def test_thirty_degree_swipe_counts(self):
-        s, results = hold([(60, 35)] * 15)
+        s, results = hold(STILL + [(60, 35)] * 15)
         self.assertTrue(results)
         self.assertEqual(s.axis, "x")
 
     def test_ambiguous_diagonal_waits(self):
-        s, results = hold([(50, 48)] * 6)
+        s, results = hold(STILL + [(50, 48)] * 6)
         self.assertEqual(results, [])
         self.assertFalse(s.active)
 
     def test_axis_lock_drops_cross_motion(self):
-        s, results = hold([(80, 0)] * 6 + [(10, 50)])
+        s, results = hold(STILL + [(80, 0)] * 6 + [(10, 50)])
         self.assertEqual(results[-1], ("move", 10 * s.cfg.gain, 0))
 
     def test_free_axis_when_unlocked(self):
-        s, results = hold([(80, 0)] * 6 + [(10, 50)], SwipeConfig(axis_lock=False))
+        s, results = hold(STILL + [(80, 0)] * 6 + [(10, 50)], SwipeConfig(axis_lock=False))
         self.assertEqual(results[-1], ("move", 10 * s.cfg.gain, 50 * s.cfg.gain))
 
     def test_running_swipe_ends_on_release(self):
-        s, _ = hold([(80, 0)] * 6)
-        self.assertEqual(s.release()[0], "end")
+        s, _ = hold(STILL + [(80, 0)] * 6)
+        self.assertEqual(let_go(s)[0], "end")
 
     def test_press_resets(self):
-        s, _ = hold([(80, 0)] * 6)
+        s, _ = hold(STILL + [(80, 0)] * 6)
         s.press(1.0)
         self.assertFalse(s.active)
         self.assertEqual(s.axis, "")

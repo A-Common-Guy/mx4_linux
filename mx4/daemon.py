@@ -346,9 +346,12 @@ class Daemon:
             self.touchpad.queue(fx * self.swipe_sign, fy * self.swipe_sign)
 
     def _thumb_release(self) -> None:
-        kind, fx, fy = self.swipe.release()
+        now = time.monotonic()
+        kind, fx, fy = self.swipe.release(now)
         if kind == "tap":
-            self.debug(f"thumb tap: moved dx={self.gest_x} dy={self.gest_y}")
+            self.debug(f"thumb tap: held {(now - self.swipe.t0) * 1000:.0f} ms, "
+                       f"moved dx={self.gest_x} dy={self.gest_y}"
+                       + (", on the move" if self.swipe.rolling else ""))
             if self.long_armed:
                 self.long_armed = False
                 b = self.cfg["button"]
@@ -403,7 +406,8 @@ class Daemon:
             self.touch_timer = 0
         tp = self.touchpad
         self.debug(f"thumb swipe {self.swipe.axis or 'free'}: "
-                   f"{(released - self.swipe_t0) * 1000:.0f} ms, counts dx={self.gest_x} dy={self.gest_y}, "
+                   f"held {(released - self.swipe.t0) * 1000:.0f} ms, "
+                   f"swiped {(released - self.swipe_t0) * 1000:.0f} ms, counts dx={self.gest_x} dy={self.gest_y}, "
                    f"{tp.frames} frames, peak {tp.max_step / touchpad.RES:.1f} mm/frame, "
                    f"undrained {tp.pending / touchpad.RES:.1f} mm, re-presses {self.swipe_repress}")
         tp.up()

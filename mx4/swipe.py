@@ -11,6 +11,13 @@ finger motion, so the first motion handed to the fingers decides the whole
 gesture. The thumb press can nudge the mouse, and hands often start a swipe
 on a slight curve, so the direction is taken from where the hand is heading
 once the motion is clearly one way, not from everything since the press.
+
+Why it watches the press itself: a thumb tap is often made on the move —
+the hand is heading for something and taps on the way. Such a press carries
+plenty of motion, so it must not be played out as a flick. Motion that is
+already there in the first few reports after the press means the mouse was
+rolling before the button went down; a short rolling press is a tap, and a
+swipe begins only if the hold goes on.
 """
 
 from __future__ import annotations
@@ -28,6 +35,8 @@ class SwipeConfig:
     recent_min: int = 50  # counts that window needs before it can decide
     dominance: float = 1.4  # dominant axis must beat the other by this (~35 degrees)
     flick_min: int = 150  # a release before the swipe began, after this much travel, is a flick
+    rolling_min: int = 30  # travel inside the settle window that means the mouse was already moving
+    rolling_hold_ms: float = 220  # a rolling press released before this is a tap, not a flick
 
 
 class ThumbSwipe:
@@ -49,6 +58,8 @@ class ThumbSwipe:
         self.total = [0, 0]  # everything since the press, nudge included
         self.path = 0  # travel after the settle window
         self.recent: list[tuple[float, int, int]] = []
+        self.settled = 0  # travel inside the settle window
+        self.rolling = False  # the mouse was moving when the button went down
 
     def motion(self, t: float, dx: int, dy: int) -> tuple[str, float, float] | None:
         """Feed raw sensor motion while the button is held.
@@ -66,12 +77,18 @@ class ThumbSwipe:
             elif self.axis == "y":
                 dx = 0
             return ("move", dx * g, dy * g) if dx or dy else None
-        if (t - self.t0) * 1000 < self.cfg.settle_ms:
+        held_ms = (t - self.t0) * 1000
+        if held_ms < self.cfg.settle_ms:
+            self.settled += abs(dx) + abs(dy)
+            if self.settled >= self.cfg.rolling_min:
+                self.rolling = True
             return None
         self.path += abs(dx) + abs(dy)
         self.recent.append((t, dx, dy))
         horizon = t - self.cfg.recent_ms / 1000
         self.recent = [r for r in self.recent if r[0] >= horizon]
+        if self.rolling and held_ms < self.cfg.rolling_hold_ms:
+            return None  # a tap on the move, unless the hold goes on
         if self.path < self.cfg.start:
             return None
         rx = sum(r[1] for r in self.recent)
@@ -80,12 +97,14 @@ class ThumbSwipe:
             return None
         return self._begin(rx, ry)
 
-    def release(self) -> tuple[str, float, float]:
+    def release(self, t: float) -> tuple[str, float, float]:
         """The button came up. Returns ("end", 0, 0) for a running swipe,
         ("flick", x, y) for a quick swipe that ended before it began (play it
         out now), or ("tap", 0, 0) for a press that never became a swipe."""
         if self.active:
             return ("end", 0.0, 0.0)
+        if self.rolling and (t - self.t0) * 1000 < self.cfg.rolling_hold_ms:
+            return ("tap", 0.0, 0.0)  # tapped on the move
         tx, ty = self.total
         if abs(tx) + abs(ty) >= self.cfg.flick_min:
             # that much travel is never a tap; no more motion is coming to
